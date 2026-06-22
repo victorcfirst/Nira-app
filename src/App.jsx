@@ -15,7 +15,14 @@ const APP_SUB = 'เรื่องเล็ก ๆ ของบ้าน'
 const K = {
   restaurants: `fh:${STORAGE_VERSION}:restaurants`,
   laundry:     `fh:${STORAGE_VERSION}:laundry`,
+  benefits:    `fh:${STORAGE_VERSION}:benefits`,
 }
+
+// quick-pick เจ้าของสิทธิ์ (พิมพ์เพิ่มเองได้)
+const OWNERS = ['ม้า', 'น้าเม', 'เยลลี่', 'มิ้น']
+// แถบ "ใกล้หมด" + สีปฏิทิน: ≤ URGENT_DAYS วัน = แดง, ≤ SOON_DAYS วัน = ส้ม
+const SOON_DAYS = 7
+const URGENT_DAYS = 2
 
 // สองพี่น้อง — เปลี่ยนชื่อ/สี/สัญลักษณ์ได้ตรงนี้
 const PEOPLE = {
@@ -55,6 +62,22 @@ function thaiShortDate(key) {
   const [y, m, d] = key.split('-').map(Number)
   return `${d} ${TH_MONTH_SHORT[m - 1]}`
 }
+// จำนวนวันจาก today ถึง dateKey ('YYYY-MM-DD') — อิง local date, ปัดเป็นวัน
+function daysUntil(dateKey, todayKey) {
+  if (!dateKey) return null
+  const [ay, am, ad] = todayKey.split('-').map(Number)
+  const [by, bm, bd] = dateKey.split('-').map(Number)
+  const a = new Date(ay, am - 1, ad)
+  const b = new Date(by, bm - 1, bd)
+  return Math.round((b - a) / 86400000)
+}
+function daysLeftText(n) {
+  if (n == null) return ''
+  if (n < 0)  return `เลยมา ${-n} วัน`
+  if (n === 0) return 'หมดวันนี้'
+  if (n === 1) return 'เหลือ 1 วัน'
+  return `เหลือ ${n} วัน`
+}
 function timeOf(iso) {
   try { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}` } catch { return '' }
 }
@@ -85,6 +108,11 @@ const IconRest = (
 const IconLaundry = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 4a2 2 0 0 0-2 2c0 1 1 1.4 2 2l8 5c.7.4 1 .9 1 1.4 0 .8-.7 1.1-1.5 1.1H4.5C3.7 15.5 3 15.2 3 14.4c0-.5.3-1 1-1.4l8-5"/>
+  </svg>
+)
+const IconTicket = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8z"/><path d="M13 6v12" strokeDasharray="2 2"/>
   </svg>
 )
 const IconCheck = (
@@ -269,11 +297,158 @@ function RestaurantCard({ r, onEdit, onAskDelete }) {
   )
 }
 
+/* ---------- benefit calendar ---------- */
+function dueLevel(n) {
+  if (n == null) return 'gray'
+  if (n <= URGENT_DAYS) return 'red'
+  if (n <= SOON_DAYS)   return 'orange'
+  return 'gray'
+}
+function BenefitCalendar({ y, m, dueMap, todayKey, selectedDay, onCellTap }) {
+  const cells = calCells(y, m)
+  return (
+    <div className="grid">
+      {cells.map((d, i) => {
+        if (d == null) return <div key={i} className="cell empty" />
+        const key  = ymd(new Date(y, m, d))
+        const list = dueMap[key]
+        const n    = list ? daysUntil(key, todayKey) : null
+        const cls  = `cell${key === todayKey ? ' today' : ''}${key === selectedDay ? ' sel' : ''}`
+        return (
+          <button key={i} className={cls} onClick={() => onCellTap(key)} aria-label={`วันที่ ${d}`}>
+            <span className="dn">{d}</span>
+            {list && (
+              <span className={`due due-${dueLevel(n)}`}>{list.length > 1 ? list.length : ''}</span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ---------- benefit form ---------- */
+function BenefitForm({ initial, onSave, onCancel }) {
+  const [title,      setTitle]      = useState(initial?.title      || '')
+  const [store,      setStore]      = useState(initial?.store      || '')
+  const [source,     setSource]     = useState(initial?.source     || '')
+  const [value,      setValue]      = useState(initial?.value      || '')
+  const [owner,      setOwner]      = useState(initial?.owner      || '')
+  const [proof,      setProof]      = useState(initial?.proof      || '')
+  const [note,       setNote]       = useState(initial?.note       || '')
+  const [expiry,     setExpiry]     = useState(initial?.expiry     || '')
+  const [claimStart, setClaimStart] = useState(initial?.claimStart || '')
+  const canSave = title.trim().length > 0 && expiry.trim().length > 0
+  const submit = () => {
+    if (!canSave) return
+    onSave({
+      title:      title.trim(),
+      store:      store.trim()  || null,
+      source:     source.trim() || null,
+      value:      value.trim()  || null,
+      owner:      owner.trim()  || null,
+      proof:      proof.trim()  || null,
+      note:       note.trim()   || null,
+      kind:       'oneoff',
+      expiry,
+      claimStart: claimStart || null,
+    })
+  }
+  return (
+    <div className="form">
+      <div className="fld">
+        <label>ชื่อสิทธิ์ / คูปอง</label>
+        <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="เช่น Koi Thé ฿50" />
+      </div>
+      <div className="fld">
+        <label>วันหมดอายุ</label>
+        <input className="inp" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+      </div>
+      <div className="fld">
+        <label>ใช้ที่ร้าน <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <input className="inp" value={store} onChange={(e) => setStore(e.target.value)} placeholder="เช่น Koi Thé" />
+      </div>
+      <div className="fld">
+        <label>มูลค่า <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <input className="inp" value={value} onChange={(e) => setValue(e.target.value)} placeholder="เช่น 50 บาท / 15%" />
+      </div>
+      <div className="fld">
+        <label>เจ้าของสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <div className="chips">
+          {OWNERS.map((o) => (
+            <button key={o} className={`chip${owner === o ? ' on' : ''}`} onClick={() => setOwner((cur) => (cur === o ? '' : o))}>{o}</button>
+          ))}
+        </div>
+        <input className="inp" style={{ marginTop: 8 }} value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="หรือพิมพ์ชื่อเอง" />
+      </div>
+      <div className="fld">
+        <label>ได้มาจาก <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <input className="inp" value={source} onChange={(e) => setSource(e.target.value)} placeholder="เช่น ธอส / uchoose / BLA" />
+      </div>
+      <div className="fld">
+        <label>หลักฐานที่ใช้รับสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <input className="inp" value={proof} onChange={(e) => setProof(e.target.value)} placeholder="เช่น แคปหน้าจอ / บัตรสมาชิก" />
+      </div>
+      <div className="fld">
+        <label>ช่วงเริ่มรับสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <input className="inp" type="date" value={claimStart} onChange={(e) => setClaimStart(e.target.value)} />
+      </div>
+      <div className="fld">
+        <label>โน้ต <span className="opt">(ไม่บังคับ)</span></label>
+        <input className="inp" value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น ใช้ได้เฉพาะสาขา…" />
+      </div>
+      <div className="formrow">
+        <button className="btn primary" disabled={!canSave} onClick={submit}>{initial ? 'บันทึกการแก้ไข' : 'เพิ่มสิทธิ์'}</button>
+        <button className="btn ghost" onClick={onCancel}>ยกเลิก</button>
+      </div>
+    </div>
+  )
+}
+
+/* ---------- benefit card ---------- */
+function BenefitCard({ b, daysLeft, onToggleDone, onEdit, onAskDelete }) {
+  const [open, setOpen] = useState(false)
+  const expired = !b.done && daysLeft != null && daysLeft < 0
+  const lvl = b.done || expired ? 'gray' : dueLevel(daysLeft)
+  return (
+    <div className={`bcard${b.done ? ' done' : ''}`}>
+      <div className="bmain" onClick={() => setOpen((o) => !o)}>
+        <div className="btitle">{b.title}</div>
+        <div className="bchips">
+          {b.store ? <span className="bchip">{b.store}</span> : null}
+          {b.value ? <span className="bchip">{b.value}</span> : null}
+          {b.owner ? <span className="bchip">{b.owner}</span> : null}
+        </div>
+        <div className={`bdue lvl-${lvl}`}>
+          หมด {thaiShortDate(b.expiry)}{b.done ? ' · ใช้แล้ว' : ` · ${daysLeftText(daysLeft)}`}
+        </div>
+        {open && (
+          <div className="bdetail">
+            {b.source ? <div><span>ได้มาจาก:</span> {b.source}</div> : null}
+            {b.proof  ? <div><span>หลักฐาน:</span> {b.proof}</div> : null}
+            {b.claimStart ? <div><span>เริ่มรับ:</span> {thaiShortDate(b.claimStart)}</div> : null}
+            {b.note   ? <div><span>โน้ต:</span> {b.note}</div> : null}
+            {!b.source && !b.proof && !b.claimStart && !b.note ? <div className="bempty">ไม่มีรายละเอียดเพิ่มเติม</div> : null}
+            <div className="bdetact">
+              <button className="iconbtn" onClick={(e) => { e.stopPropagation(); onEdit() }} aria-label="แก้ไข">{IconEdit}</button>
+              <button className="iconbtn" onClick={(e) => { e.stopPropagation(); onAskDelete() }} aria-label="ลบ">{IconTrash}</button>
+            </div>
+          </div>
+        )}
+      </div>
+      <button className={`donebtn${b.done ? ' on' : ''}`} onClick={onToggleDone}>
+        {b.done ? <>{IconCheck} ใช้แล้ว</> : 'ใช้แล้ว'}
+      </button>
+    </div>
+  )
+}
+
 /* ============================ APP ============================ */
 export default function App() {
   const [tab,         setTab]         = useState('restaurants')
   const [restaurants, setRestaurants] = useState([])
   const [laundry,     setLaundry]     = useState({})
+  const [benefits,    setBenefits]    = useState([])
   const [ready,       setReady]       = useState(false)
   const [saveError,   setSaveError]   = useState(false)
 
@@ -288,9 +463,18 @@ export default function App() {
   const [editingId, setEditingId] = useState(null)
   const [confirmId, setConfirmId] = useState(null)
 
+  // benefits ui state
+  const [benView,    setBenView]    = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() } })
+  const [benSelDay,  setBenSelDay]  = useState(null)
+  const [benAdding,  setBenAdding]  = useState(false)
+  const [benEditId,  setBenEditId]  = useState(null)
+  const [benConfId,  setBenConfId]  = useState(null)
+  const [benShowOld, setBenShowOld] = useState(false)
+
   // refs for dedup realtime echoes (we get our own writes back)
   const restRef = useRef(null)
   const launRef = useRef(null)
+  const benRef  = useRef(null)
 
   // env check
   const envOk = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY)
@@ -300,10 +484,11 @@ export default function App() {
     let alive = true
 
     // Load initial data
-    Promise.all([getJSON(K.restaurants), getJSON(K.laundry)]).then(([r, l]) => {
+    Promise.all([getJSON(K.restaurants), getJSON(K.laundry), getJSON(K.benefits)]).then(([r, l, b]) => {
       if (!alive) return
       if (r)      { restRef.current = JSON.stringify(r); setRestaurants(r) }
       if (l)      { launRef.current = JSON.stringify(l); setLaundry(l) }
+      if (b)      { benRef.current  = JSON.stringify(b); setBenefits(b) }
       setReady(true)
     })
 
@@ -315,6 +500,7 @@ export default function App() {
         const s = JSON.stringify(value)
         if (key === K.restaurants && s !== restRef.current) { restRef.current = s; setRestaurants(value) }
         if (key === K.laundry     && s !== launRef.current) { launRef.current = s; setLaundry(value) }
+        if (key === K.benefits    && s !== benRef.current)  { benRef.current  = s; setBenefits(value) }
       })
       .subscribe()
 
@@ -334,6 +520,20 @@ export default function App() {
   const addRestaurant    = (data)     => saveRest((cur) => [{ id: uid(), createdAt: Date.now(), ...data }, ...cur])
   const updateRestaurant = (id, data) => saveRest((cur) => cur.map((r) => (r.id === id ? { ...r, ...data } : r)))
   const removeRestaurant = (id)       => saveRest((cur) => cur.filter((r) => r.id !== id))
+
+  const saveBen = useCallback(async (updater) => {
+    const cur  = (await getJSON(K.benefits)) ?? benefits
+    const next = updater(cur)
+    setBenefits(next)
+    benRef.current = JSON.stringify(next)
+    const ok = await setJSON(K.benefits, next)
+    if (!ok) setSaveError(true)
+  }, [benefits])
+
+  const addBenefit    = (data)     => saveBen((cur) => [{ id: uid(), createdAt: Date.now(), done: false, ...data }, ...cur])
+  const updateBenefit = (id, data) => saveBen((cur) => cur.map((b) => (b.id === id ? { ...b, ...data } : b)))
+  const removeBenefit = (id)       => saveBen((cur) => cur.filter((b) => b.id !== id))
+  const toggleBenDone = (id)       => saveBen((cur) => cur.map((b) => (b.id === id ? { ...b, done: !b.done, doneAt: !b.done ? new Date().toISOString() : null } : b)))
 
   const setDay = useCallback(async (dateKey, personId) => {
     const cur  = (await getJSON(K.laundry)) ?? laundry
@@ -397,6 +597,42 @@ export default function App() {
     [list]
   )
 
+  /* ---- benefits derived ---- */
+  const benWithDays = useMemo(
+    () => benefits.map((b) => ({ ...b, _d: daysUntil(b.expiry, todayKey) })),
+    [benefits, todayKey]
+  )
+  // active = ยังไม่ใช้ และ ยังไม่หมดอายุ
+  const activeBen = useMemo(
+    () => benWithDays.filter((b) => !b.done && (b._d == null || b._d >= 0)).sort((a, b) => (a._d ?? 1e9) - (b._d ?? 1e9)),
+    [benWithDays]
+  )
+  const oldBen = useMemo(
+    () => benWithDays.filter((b) => b.done || (b._d != null && b._d < 0)).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')),
+    [benWithDays]
+  )
+  const soonBen = useMemo(
+    () => activeBen.filter((b) => b._d != null && b._d <= SOON_DAYS),
+    [activeBen]
+  )
+  // map expiry -> สิทธิ์ที่ยัง active (ใช้กับ marker ปฏิทิน)
+  const benDueMap = useMemo(() => {
+    const map = {}
+    for (const b of activeBen) {
+      if (!b.expiry) continue
+      ;(map[b.expiry] ??= []).push(b)
+    }
+    return map
+  }, [activeBen])
+  const shownBen = useMemo(
+    () => (benSelDay ? activeBen.filter((b) => b.expiry === benSelDay) : activeBen),
+    [activeBen, benSelDay]
+  )
+
+  const benPrev = addMons(benView.y, benView.m, -1)
+  const benNext = addMons(benView.y, benView.m,  1)
+  const benOnThisMonth = benView.y === today.getFullYear() && benView.m === today.getMonth()
+
   return (
     <div className="fh">
       <style>{CSS}</style>
@@ -419,6 +655,7 @@ export default function App() {
         <div className="tabs">
           <button className={`tab${tab === 'restaurants' ? ' active' : ''}`} onClick={() => setTab('restaurants')}>{IconRest} ร้านอาหาร</button>
           <button className={`tab${tab === 'laundry'     ? ' active' : ''}`} onClick={() => setTab('laundry')}>{IconLaundry} เวรตากผ้า</button>
+          <button className={`tab${tab === 'benefits'    ? ' active' : ''}`} onClick={() => setTab('benefits')}>{IconTicket} สิทธิ์</button>
         </div>
 
         {!ready ? (
@@ -486,6 +723,144 @@ export default function App() {
               <MiniMonth y={prev.y} m={prev.m} role="เดือนก่อน"  laundry={laundry} />
               <MiniMonth y={next.y} m={next.m} role="เดือนถัดไป" laundry={laundry} />
             </div>
+          </>
+        ) : tab === 'benefits' ? (
+          <>
+            {/* แถบใกล้หมด */}
+            {soonBen.length > 0 && (
+              <div className="soonbar">
+                <div className="soonhead">⏰ ใกล้หมดอายุ</div>
+                {soonBen.map((b) => (
+                  <div key={b.id} className={`soonitem lvl-${dueLevel(b._d)}`}>
+                    <span className="sname">{b.title}{b.store ? <span className="sstore"> · {b.store}</span> : null}</span>
+                    <span className="sdays">{daysLeftText(b._d)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ปฏิทิน */}
+            <div className="calcard">
+              <div className="calhead">
+                <button className="navbtn" onClick={() => setBenView(benPrev)} aria-label="เดือนก่อน">‹</button>
+                <div className="mname">{TH_MONTH[benView.m]} {beYear(benView.y)}</div>
+                <button className="navbtn" onClick={() => setBenView(benNext)} aria-label="เดือนถัดไป">›</button>
+              </div>
+              <div className="dow">{DOW.map((d, i) => <span key={i}>{d}</span>)}</div>
+              <BenefitCalendar
+                y={benView.y} m={benView.m} dueMap={benDueMap} todayKey={todayKey}
+                selectedDay={benSelDay}
+                onCellTap={(key) => setBenSelDay((cur) => (cur === key ? null : (benDueMap[key] ? key : cur)))}
+              />
+              {!benOnThisMonth && (
+                <button className="todaybtn" onClick={() => { const d = new Date(); setBenView({ y: d.getFullYear(), m: d.getMonth() }) }}>
+                  กลับมาเดือนนี้
+                </button>
+              )}
+              <div className="legend">
+                <div className="keys">
+                  <span className="key"><span className="due due-red" /> ≤{URGENT_DAYS} วัน</span>
+                  <span className="key"><span className="due due-orange" /> ≤{SOON_DAYS} วัน</span>
+                  <span className="key"><span className="due due-gray" /> อื่น ๆ</span>
+                </div>
+              </div>
+            </div>
+
+            {benSelDay && (
+              <div className="selbar">
+                <span>เฉพาะวันที่ {thaiShortDate(benSelDay)}</span>
+                <button onClick={() => setBenSelDay(null)}>ดูทั้งหมด</button>
+              </div>
+            )}
+
+            {!benAdding && !benEditId && (
+              <button className="addbtn" onClick={() => setBenAdding(true)}>+ เพิ่มสิทธิ์ / คูปอง</button>
+            )}
+            {benAdding && (
+              <BenefitForm
+                onSave={(d) => { addBenefit(d); setBenAdding(false) }}
+                onCancel={() => setBenAdding(false)}
+              />
+            )}
+
+            <div className="blist">
+              {shownBen.length === 0 ? (
+                <div className="empty">
+                  {benefits.length === 0
+                    ? 'ยังไม่มีสิทธิ์ในลิสต์\nเพิ่มคูปอง/สิทธิ์เพื่อกันลืมใช้ก่อนหมดอายุ'
+                    : (benSelDay ? 'ไม่มีสิทธิ์ที่หมดในวันนี้' : 'ไม่มีสิทธิ์ที่ยังใช้ได้')}
+                </div>
+              ) : (
+                shownBen.map((b) =>
+                  benEditId === b.id ? (
+                    <BenefitForm
+                      key={b.id}
+                      initial={b}
+                      onSave={(d) => { updateBenefit(b.id, d); setBenEditId(null) }}
+                      onCancel={() => setBenEditId(null)}
+                    />
+                  ) : benConfId === b.id ? (
+                    <div className="bcard confirm" key={b.id}>
+                      <div className="bmain">
+                        <div className="btitle">ลบ &quot;{b.title}&quot; ?</div>
+                        <div className="bdue lvl-gray">การลบนี้ย้อนกลับไม่ได้</div>
+                      </div>
+                      <div className="formrow tight">
+                        <button className="btn danger" onClick={() => { removeBenefit(b.id); setBenConfId(null) }}>ลบ</button>
+                        <button className="btn ghost"  onClick={() => setBenConfId(null)}>ยกเลิก</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <BenefitCard
+                      key={b.id} b={b} daysLeft={b._d}
+                      onToggleDone={() => toggleBenDone(b.id)}
+                      onEdit={() => { setBenEditId(b.id); setBenAdding(false) }}
+                      onAskDelete={() => setBenConfId(b.id)}
+                    />
+                  )
+                )
+              )}
+            </div>
+
+            {oldBen.length > 0 && (
+              <div className="oldsec">
+                <button className="oldhead" onClick={() => setBenShowOld((o) => !o)}>
+                  ใช้แล้ว / หมดอายุ ({oldBen.length}) <span className="chev">{benShowOld ? '▴' : '▾'}</span>
+                </button>
+                {benShowOld && (
+                  <div className="blist">
+                    {oldBen.map((b) =>
+                      benEditId === b.id ? (
+                        <BenefitForm
+                          key={b.id}
+                          initial={b}
+                          onSave={(d) => { updateBenefit(b.id, d); setBenEditId(null) }}
+                          onCancel={() => setBenEditId(null)}
+                        />
+                      ) : benConfId === b.id ? (
+                        <div className="bcard confirm" key={b.id}>
+                          <div className="bmain">
+                            <div className="btitle">ลบ &quot;{b.title}&quot; ?</div>
+                            <div className="bdue lvl-gray">การลบนี้ย้อนกลับไม่ได้</div>
+                          </div>
+                          <div className="formrow tight">
+                            <button className="btn danger" onClick={() => { removeBenefit(b.id); setBenConfId(null) }}>ลบ</button>
+                            <button className="btn ghost"  onClick={() => setBenConfId(null)}>ยกเลิก</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <BenefitCard
+                          key={b.id} b={b} daysLeft={b._d}
+                          onToggleDone={() => toggleBenDone(b.id)}
+                          onEdit={() => { setBenEditId(b.id); setBenAdding(false) }}
+                          onAskDelete={() => setBenConfId(b.id)}
+                        />
+                      )
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -699,6 +1074,55 @@ const CSS = `
 
 .fh .empty{text-align:center;color:var(--ink-soft);padding:34px 16px;font-size:14px;line-height:1.7;white-space:pre-line}
 .fh .footer{text-align:center;color:var(--ink-soft);font-size:11.5px;margin-top:28px;line-height:1.6}
+
+/* ---- benefits ---- */
+.fh .tabs{flex-wrap:nowrap;overflow-x:auto}
+.fh .tab{white-space:nowrap}
+
+.fh .soonbar{background:var(--orange-wash);border:1px solid #F4C9A6;border-radius:16px;padding:12px 14px;margin-bottom:14px}
+.fh .soonhead{font-weight:700;font-size:13.5px;color:var(--orange-ink);margin-bottom:8px}
+.fh .soonitem{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(168,80,28,.12)}
+.fh .soonitem:first-of-type{border-top:0}
+.fh .soonitem .sname{flex:1;min-width:0;font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fh .soonitem .sstore{color:var(--ink-soft);font-weight:400}
+.fh .soonitem .sdays{flex:0 0 auto;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12.5px;font-weight:700}
+.fh .soonitem.lvl-red .sdays{color:#B91C1C}
+.fh .soonitem.lvl-orange .sdays{color:var(--orange-ink)}
+.fh .soonitem.lvl-gray .sdays{color:var(--ink-soft)}
+
+.fh .cell.sel{border-color:var(--ink);box-shadow:0 0 0 1.5px var(--ink) inset}
+.fh .due{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);min-width:8px;height:8px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;line-height:1;padding:0 3px;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.fh .due:empty{padding:0;width:8px}
+.fh .due-red{background:#D9483B}
+.fh .due-orange{background:var(--orange)}
+.fh .due-gray{background:var(--ink-soft)}
+.fh .legend .key .due{position:static;transform:none}
+
+.fh .selbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;background:var(--paper-2);border-radius:12px;padding:9px 14px;font-size:13px;font-weight:600;color:var(--ink)}
+.fh .selbar button{border:0;background:var(--ink);color:#fff;border-radius:999px;padding:6px 13px;font-family:'IBM Plex Sans Thai',system-ui,sans-serif;font-weight:600;font-size:12.5px;cursor:pointer}
+
+.fh .blist{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.fh .bcard{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:14px;display:flex;align-items:flex-start;gap:12px}
+.fh .bcard.confirm{align-items:center}
+.fh .bcard.done{opacity:.62}
+.fh .bcard .bmain{flex:1;min-width:0;cursor:pointer}
+.fh .btitle{font-family:'Mali',system-ui,sans-serif;font-weight:600;font-size:16px;word-break:break-word}
+.fh .bchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.fh .bchip{background:var(--paper-2);color:var(--ink-soft);border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600}
+.fh .bdue{margin-top:8px;font-size:12.5px;font-weight:600;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.fh .bdue.lvl-red{color:#B91C1C}
+.fh .bdue.lvl-orange{color:var(--orange-ink)}
+.fh .bdue.lvl-gray{color:var(--ink-soft)}
+.fh .bdetail{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.7;color:var(--ink)}
+.fh .bdetail span{color:var(--ink-soft)}
+.fh .bdetail .bempty{color:var(--ink-soft)}
+.fh .bdetact{display:flex;gap:8px;margin-top:10px}
+.fh .donebtn{flex:0 0 auto;align-self:flex-start;border:1.5px solid var(--mint);background:var(--card);color:var(--mint-ink);border-radius:11px;padding:8px 12px;font-family:'IBM Plex Sans Thai',system-ui,sans-serif;font-weight:600;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.fh .donebtn.on{background:var(--mint-wash)}
+
+.fh .oldsec{margin-top:18px}
+.fh .oldhead{width:100%;border:1px solid var(--line);background:var(--paper);border-radius:12px;padding:11px 14px;font-family:'IBM Plex Sans Thai',system-ui,sans-serif;font-weight:600;font-size:13.5px;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.fh .oldhead .chev{font-size:11px}
 
 .fh button:focus-visible,.fh input:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 @keyframes fhpop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.14)}100%{transform:scale(1);opacity:1}}

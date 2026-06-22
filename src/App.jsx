@@ -220,6 +220,26 @@ function iceContent(r) {
   }
   return <span className="badge unknown">ยังไม่ได้เช็ก</span>
 }
+/* ---------- ice summary row (compact view) ---------- */
+function iceSummaryBadge(r) {
+  if (r.ice === 'free') return <span className="ibadge free">ฟรี</span>
+  if (r.ice === 'paid') {
+    const segs = []
+    if (r.glass  != null) segs.push(`฿${r.glass}`)
+    if (r.bucket != null) segs.push(`฿${r.bucket}`)
+    return <span className="ibadge paid">{segs.length ? segs.join('·') : 'มีค่าใช้จ่าย'}</span>
+  }
+  return <span className="ibadge unknown">ยังไม่ได้เช็ก</span>
+}
+function IceRow({ r }) {
+  return (
+    <div className="irow">
+      <span className="iname">{r.name}</span>
+      {iceSummaryBadge(r)}
+    </div>
+  )
+}
+
 function RestaurantCard({ r, onEdit, onAskDelete }) {
   const [noteOpen, setNoteOpen] = useState(false)
   return (
@@ -263,6 +283,7 @@ export default function App() {
   // restaurant ui state
   const [search,    setSearch]    = useState('')
   const [filter,    setFilter]    = useState('all')
+  const [viewMode,  setViewMode]  = useState('full')
   const [adding,    setAdding]    = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [confirmId, setConfirmId] = useState(null)
@@ -371,6 +392,11 @@ export default function App() {
     })
   }, [restaurants, search, filter])
 
+  const iceList = useMemo(
+    () => [...list].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th')),
+    [list]
+  )
+
   return (
     <div className="fh">
       <style>{CSS}</style>
@@ -474,16 +500,35 @@ export default function App() {
               ))}
             </div>
 
-            {!adding && !editingId && (
+            <div className="seg viewseg">
+              {[['full','การ์ดเต็ม'],['ice','สรุปน้ำแข็ง']].map(([k, lb]) => (
+                <button key={k} className={viewMode === k ? 'on' : ''} onClick={() => setViewMode(k)}>{lb}</button>
+              ))}
+            </div>
+
+            {viewMode === 'full' && !adding && !editingId && (
               <button className="addbtn" onClick={() => setAdding(true)}>+ เพิ่มร้านใหม่</button>
             )}
-            {adding && (
+            {viewMode === 'full' && adding && (
               <RestaurantForm
                 onSave={(d) => { addRestaurant(d); setAdding(false) }}
                 onCancel={() => setAdding(false)}
               />
             )}
 
+            {viewMode === 'ice' ? (
+              <div className="ilist">
+                {iceList.length === 0 ? (
+                  <div className="empty">
+                    {restaurants.length === 0
+                      ? 'ยังไม่มีร้านในลิสต์'
+                      : 'ไม่พบร้านที่ตรงกับที่ค้นหา'}
+                  </div>
+                ) : (
+                  iceList.map((r) => <IceRow key={r.id} r={r} />)
+                )}
+              </div>
+            ) : (
             <div className="rlist">
               {list.length === 0 ? (
                 <div className="empty">
@@ -521,6 +566,7 @@ export default function App() {
                 )
               )}
             </div>
+            )}
           </>
         )}
 
@@ -622,6 +668,15 @@ const CSS = `
 .fh .btn.primary:disabled{opacity:.4;cursor:not-allowed}
 .fh .btn.ghost{background:var(--paper-2);color:var(--ink)}
 .fh .btn.danger{background:#D9483B;color:#fff}
+
+.fh .viewseg{margin-top:12px}
+.fh .ilist{margin-top:16px;display:flex;flex-direction:column;gap:7px}
+.fh .irow{background:var(--card);border-radius:12px;box-shadow:var(--shadow);padding:11px 14px;display:flex;align-items:center;gap:10px}
+.fh .irow .iname{flex:1;min-width:0;font-weight:600;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fh .ibadge{flex:0 0 auto;border-radius:999px;padding:4px 11px;font-size:12.5px;font-weight:600;line-height:1.2}
+.fh .ibadge.free{background:var(--mint-wash);color:var(--mint-ink)}
+.fh .ibadge.paid{background:var(--orange-wash);color:var(--orange-ink);font-family:'IBM Plex Mono',ui-monospace,monospace}
+.fh .ibadge.unknown{background:var(--paper-2);color:var(--ink-soft)}
 
 .fh .rlist{margin-top:16px;display:flex;flex-direction:column;gap:10px}
 .fh .rcard{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:14px;display:flex;align-items:flex-start;gap:12px}

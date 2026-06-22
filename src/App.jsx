@@ -152,6 +152,7 @@ function RestaurantForm({ initial, onSave, onCancel }) {
   const [glass,  setGlass]  = useState(initial?.glass  != null ? String(initial.glass)  : '')
   const [bucket, setBucket] = useState(initial?.bucket != null ? String(initial.bucket) : '')
   const [water,  setWater]  = useState(initial?.water  != null ? String(initial.water)  : '')
+  const [note,   setNote]   = useState(initial?.note   || '')
   const onlyNum = (v) => v.replace(/[^0-9.]/g, '')
   const canSave = name.trim().length > 0
   const submit = () => {
@@ -162,6 +163,7 @@ function RestaurantForm({ initial, onSave, onCancel }) {
       data.bucket = bucket.trim() === '' ? null : Number(bucket)
     } else { data.glass = null; data.bucket = null }
     data.water = water.trim() === '' ? null : Number(water)
+    data.note  = note.trim() === '' ? null : note.trim()
     onSave(data)
   }
   return (
@@ -192,6 +194,10 @@ function RestaurantForm({ initial, onSave, onCancel }) {
         <label>ราคาน้ำเปล่า <span className="opt">(ไม่ใส่ก็ได้ · เก็บไว้ดูเฉย ๆ)</span></label>
         <div className="price"><span>฿</span><input inputMode="numeric" value={water} onChange={(e) => setWater(onlyNum(e.target.value))} placeholder="–" /></div>
       </div>
+      <div className="fld">
+        <label>โน้ต <span className="opt">(ไม่บังคับ)</span></label>
+        <input className="inp" value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น ปิดวันจันทร์ / จอดรถยาก" />
+      </div>
       <div className="formrow">
         <button className="btn primary" disabled={!canSave} onClick={submit}>{initial ? 'บันทึกการแก้ไข' : 'เพิ่มร้าน'}</button>
         <button className="btn ghost" onClick={onCancel}>ยกเลิก</button>
@@ -215,6 +221,7 @@ function iceContent(r) {
   return <span className="badge unknown">ยังไม่ได้เช็ก</span>
 }
 function RestaurantCard({ r, onEdit, onAskDelete }) {
+  const [noteOpen, setNoteOpen] = useState(false)
   return (
     <div className="rcard">
       <div className="rmain">
@@ -224,6 +231,15 @@ function RestaurantCard({ r, onEdit, onAskDelete }) {
           {iceContent(r)}
           {r.water != null && <span className="badge water">{IconDrop} น้ำเปล่า <span className="pm">฿{r.water}</span></span>}
         </div>
+        {r.note ? (
+          <div
+            className={`rnote${noteOpen ? ' open' : ''}`}
+            onClick={() => setNoteOpen((o) => !o)}
+            title={noteOpen ? 'แตะเพื่อย่อ' : 'แตะเพื่อขยาย'}
+          >
+            {r.note}
+          </div>
+        ) : null}
       </div>
       <div className="ract">
         <button className="iconbtn" onClick={onEdit}       aria-label="แก้ไข">{IconEdit}</button>
@@ -621,6 +637,8 @@ const CSS = `
 .fh .badge.water{background:#E6EFF4;color:#3D6675}
 .fh .badge .pm{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600}
 .fh .badge .mid{opacity:.6}
+.fh .rnote{margin-top:8px;font-size:12.5px;line-height:1.5;color:var(--ink-soft);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fh .rnote.open{white-space:normal;overflow:visible;word-break:break-word}
 .fh .ract{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
 .fh .iconbtn{width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:var(--card);cursor:pointer;color:var(--ink-soft);display:flex;align-items:center;justify-content:center}
 

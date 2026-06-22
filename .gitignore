@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+package-lock.json
+
+# build output
+dist/
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# logs / os
+*.log
+.DS_Store

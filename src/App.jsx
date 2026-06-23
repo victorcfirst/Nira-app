@@ -81,6 +81,32 @@ function daysLeftText(n) {
 function timeOf(iso) {
   try { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}` } catch { return '' }
 }
+// จำนวนวันในเดือน (m = 0-11)
+function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate() }
+// clamp วันของเดือน (1..จำนวนวันในเดือน)
+function clampDay(day, dim) { return Math.min(Math.max(day, 1), dim) }
+// สถานะของสิทธิ์ (รองรับทั้ง oneoff และ monthly) อิงจาก today
+function benStatus(b, todayKey) {
+  if (b.kind === 'monthly') {
+    const [ty, tm] = todayKey.split('-').map(Number) // tm = 1-12
+    const ym  = `${ty}-${pad(tm)}`
+    const dim = daysInMonth(ty, tm - 1)
+    const dEnd = clampDay(b.dayEnd || dim, dim)
+    const dueKey = ymd(new Date(ty, tm - 1, dEnd))
+    const received = (b.doneMonths || []).includes(ym)
+    const d = daysUntil(dueKey, todayKey)
+    const missed = !received && d < 0
+    return { monthly: true, ym, dStart: b.dayStart || 1, dEnd, dueKey, received, missed, d, settled: received || missed }
+  }
+  const d = daysUntil(b.expiry, todayKey)
+  const expired = !b.done && d != null && d < 0
+  return { monthly: false, d, received: !!b.done, missed: false, expired, settled: !!b.done || expired }
+}
+// dueKey ของ monthly สำหรับเดือนที่กำลังดู (y, m = 0-11)
+function monthlyDueKey(b, y, m) {
+  const dim = daysInMonth(y, m)
+  return ymd(new Date(y, m, clampDay(b.dayEnd || dim, dim)))
+}
 
 /* ---------- small bits ---------- */
 function Stamp({ shape, color, size = 24, rot = 0, pop = false }) {
@@ -336,23 +362,33 @@ function BenefitForm({ initial, onSave, onCancel }) {
   const [owner,      setOwner]      = useState(initial?.owner      || '')
   const [proof,      setProof]      = useState(initial?.proof      || '')
   const [note,       setNote]       = useState(initial?.note       || '')
+  const [kind,       setKind]       = useState(initial?.kind       || 'oneoff')
   const [expiry,     setExpiry]     = useState(initial?.expiry     || '')
   const [claimStart, setClaimStart] = useState(initial?.claimStart || '')
-  const canSave = title.trim().length > 0 && expiry.trim().length > 0
+  const [dayStart,   setDayStart]   = useState(initial?.dayStart != null ? String(initial.dayStart) : '')
+  const [dayEnd,     setDayEnd]     = useState(initial?.dayEnd   != null ? String(initial.dayEnd)   : '')
+  const onlyDay = (v) => v.replace(/[^0-9]/g, '').slice(0, 2)
+  const canSave = title.trim().length > 0 && (
+    kind === 'monthly' ? Number(dayEnd) >= 1 && Number(dayEnd) <= 31 : expiry.trim().length > 0
+  )
   const submit = () => {
     if (!canSave) return
-    onSave({
-      title:      title.trim(),
-      store:      store.trim()  || null,
-      source:     source.trim() || null,
-      value:      value.trim()  || null,
-      owner:      owner.trim()  || null,
-      proof:      proof.trim()  || null,
-      note:       note.trim()   || null,
-      kind:       'oneoff',
-      expiry,
-      claimStart: claimStart || null,
-    })
+    const base = {
+      title:  title.trim(),
+      store:  store.trim()  || null,
+      source: source.trim() || null,
+      value:  value.trim()  || null,
+      owner:  owner.trim()  || null,
+      proof:  proof.trim()  || null,
+      note:   note.trim()   || null,
+    }
+    if (kind === 'monthly') {
+      const de = clampDay(Number(dayEnd), 31)
+      const ds = dayStart.trim() === '' ? 1 : clampDay(Number(dayStart), de)
+      onSave({ ...base, kind: 'monthly', dayStart: ds, dayEnd: de, doneMonths: initial?.doneMonths || [] })
+    } else {
+      onSave({ ...base, kind: 'oneoff', expiry, claimStart: claimStart || null })
+    }
   }
   return (
     <div className="form">
@@ -361,9 +397,27 @@ function BenefitForm({ initial, onSave, onCancel }) {
         <input className="inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="เช่น Koi Thé ฿50" />
       </div>
       <div className="fld">
-        <label>วันหมดอายุ</label>
-        <input className="inp" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+        <label>ประเภท</label>
+        <div className="seg">
+          {[['oneoff','ครั้งเดียว'],['monthly','รายเดือน']].map(([k, lb]) => (
+            <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{lb}</button>
+          ))}
+        </div>
       </div>
+      {kind === 'oneoff' ? (
+        <div className="fld">
+          <label>วันหมดอายุ</label>
+          <input className="inp" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+        </div>
+      ) : (
+        <div className="fld">
+          <label>รับได้วันที่ <span className="opt">(ของทุกเดือน · ไม่ใส่ช่องซ้ายก็ได้)</span></label>
+          <div className="prices">
+            <div className="price"><span>ตั้งแต่วันที่</span><input inputMode="numeric" value={dayStart} onChange={(e) => setDayStart(onlyDay(e.target.value))} placeholder="1" /></div>
+            <div className="price"><span>ถึงวันที่</span><input  inputMode="numeric" value={dayEnd}   onChange={(e) => setDayEnd(onlyDay(e.target.value))}   placeholder="เช่น 5" /></div>
+          </div>
+        </div>
+      )}
       <div className="fld">
         <label>ใช้ที่ร้าน <span className="opt">(ไม่ใส่ก็ได้)</span></label>
         <input className="inp" value={store} onChange={(e) => setStore(e.target.value)} placeholder="เช่น Koi Thé" />
@@ -389,10 +443,12 @@ function BenefitForm({ initial, onSave, onCancel }) {
         <label>หลักฐานที่ใช้รับสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
         <input className="inp" value={proof} onChange={(e) => setProof(e.target.value)} placeholder="เช่น แคปหน้าจอ / บัตรสมาชิก" />
       </div>
-      <div className="fld">
-        <label>ช่วงเริ่มรับสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
-        <input className="inp" type="date" value={claimStart} onChange={(e) => setClaimStart(e.target.value)} />
-      </div>
+      {kind === 'oneoff' && (
+        <div className="fld">
+          <label>ช่วงเริ่มรับสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+          <input className="inp" type="date" value={claimStart} onChange={(e) => setClaimStart(e.target.value)} />
+        </div>
+      )}
       <div className="fld">
         <label>โน้ต <span className="opt">(ไม่บังคับ)</span></label>
         <input className="inp" value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น ใช้ได้เฉพาะสาขา…" />
@@ -406,29 +462,36 @@ function BenefitForm({ initial, onSave, onCancel }) {
 }
 
 /* ---------- benefit card ---------- */
-function BenefitCard({ b, daysLeft, onToggleDone, onEdit, onAskDelete }) {
+function BenefitCard({ b, onToggle, onEdit, onAskDelete }) {
   const [open, setOpen] = useState(false)
-  const expired = !b.done && daysLeft != null && daysLeft < 0
-  const lvl = b.done || expired ? 'gray' : dueLevel(daysLeft)
+  const s = b._s
+  const lvl = s.settled ? 'gray' : dueLevel(s.d)
+  const dueText = s.monthly
+    ? (s.received ? 'รับแล้วเดือนนี้'
+      : s.missed  ? 'พลาดเดือนนี้ · กลับมาใหม่เดือนหน้า'
+      : `รับภายในวันที่ ${s.dEnd} · ${daysLeftText(s.d)}`)
+    : `หมด ${thaiShortDate(b.expiry)}${b.done ? ' · ใช้แล้ว' : ` · ${daysLeftText(s.d)}`}`
+  const dim = s.received || (!s.monthly && b.done)
+  const hasDetail = b.source || b.proof || b.claimStart || b.note || s.monthly
   return (
-    <div className={`bcard${b.done ? ' done' : ''}`}>
+    <div className={`bcard${dim ? ' done' : ''}`}>
       <div className="bmain" onClick={() => setOpen((o) => !o)}>
         <div className="btitle">{b.title}</div>
         <div className="bchips">
+          {s.monthly ? <span className="bchip month">รายเดือน</span> : null}
           {b.store ? <span className="bchip">{b.store}</span> : null}
           {b.value ? <span className="bchip">{b.value}</span> : null}
           {b.owner ? <span className="bchip">{b.owner}</span> : null}
         </div>
-        <div className={`bdue lvl-${lvl}`}>
-          หมด {thaiShortDate(b.expiry)}{b.done ? ' · ใช้แล้ว' : ` · ${daysLeftText(daysLeft)}`}
-        </div>
+        <div className={`bdue lvl-${lvl}`}>{dueText}</div>
         {open && (
           <div className="bdetail">
+            {s.monthly ? <div><span>รับได้:</span> วันที่ {s.dStart}–{s.dEnd} ของทุกเดือน</div> : null}
             {b.source ? <div><span>ได้มาจาก:</span> {b.source}</div> : null}
             {b.proof  ? <div><span>หลักฐาน:</span> {b.proof}</div> : null}
-            {b.claimStart ? <div><span>เริ่มรับ:</span> {thaiShortDate(b.claimStart)}</div> : null}
+            {!s.monthly && b.claimStart ? <div><span>เริ่มรับ:</span> {thaiShortDate(b.claimStart)}</div> : null}
             {b.note   ? <div><span>โน้ต:</span> {b.note}</div> : null}
-            {!b.source && !b.proof && !b.claimStart && !b.note ? <div className="bempty">ไม่มีรายละเอียดเพิ่มเติม</div> : null}
+            {!hasDetail ? <div className="bempty">ไม่มีรายละเอียดเพิ่มเติม</div> : null}
             <div className="bdetact">
               <button className="iconbtn" onClick={(e) => { e.stopPropagation(); onEdit() }} aria-label="แก้ไข">{IconEdit}</button>
               <button className="iconbtn" onClick={(e) => { e.stopPropagation(); onAskDelete() }} aria-label="ลบ">{IconTrash}</button>
@@ -436,9 +499,15 @@ function BenefitCard({ b, daysLeft, onToggleDone, onEdit, onAskDelete }) {
           </div>
         )}
       </div>
-      <button className={`donebtn${b.done ? ' on' : ''}`} onClick={onToggleDone}>
-        {b.done ? <>{IconCheck} ใช้แล้ว</> : 'ใช้แล้ว'}
-      </button>
+      {s.monthly ? (
+        <button className={`donebtn${s.received ? ' on' : ''}`} onClick={onToggle}>
+          {s.received ? <>{IconCheck} เดือนนี้</> : 'รับแล้วเดือนนี้'}
+        </button>
+      ) : (
+        <button className={`donebtn${b.done ? ' on' : ''}`} onClick={onToggle}>
+          {b.done ? <>{IconCheck} ใช้แล้ว</> : 'ใช้แล้ว'}
+        </button>
+      )}
     </div>
   )
 }
@@ -534,6 +603,12 @@ export default function App() {
   const updateBenefit = (id, data) => saveBen((cur) => cur.map((b) => (b.id === id ? { ...b, ...data } : b)))
   const removeBenefit = (id)       => saveBen((cur) => cur.filter((b) => b.id !== id))
   const toggleBenDone = (id)       => saveBen((cur) => cur.map((b) => (b.id === id ? { ...b, done: !b.done, doneAt: !b.done ? new Date().toISOString() : null } : b)))
+  const toggleBenMonth = (id, ym)  => saveBen((cur) => cur.map((b) => {
+    if (b.id !== id) return b
+    const months = b.doneMonths || []
+    const has = months.includes(ym)
+    return { ...b, doneMonths: has ? months.filter((x) => x !== ym) : [...months, ym] }
+  }))
 
   const setDay = useCallback(async (dateKey, personId) => {
     const cur  = (await getJSON(K.laundry)) ?? laundry
@@ -598,35 +673,43 @@ export default function App() {
   )
 
   /* ---- benefits derived ---- */
-  const benWithDays = useMemo(
-    () => benefits.map((b) => ({ ...b, _d: daysUntil(b.expiry, todayKey) })),
+  const thisMonthKey = todayKey.slice(0, 7) // 'YYYY-MM'
+  const benAug = useMemo(
+    () => benefits.map((b) => { const s = benStatus(b, todayKey); return { ...b, _s: s, _d: s.d } }),
     [benefits, todayKey]
   )
-  // active = ยังไม่ใช้ และ ยังไม่หมดอายุ
+  // active = oneoff ที่ยังไม่ใช้/ไม่หมด, monthly ที่เดือนนี้ยังไม่รับและยังไม่เลย dayEnd
   const activeBen = useMemo(
-    () => benWithDays.filter((b) => !b.done && (b._d == null || b._d >= 0)).sort((a, b) => (a._d ?? 1e9) - (b._d ?? 1e9)),
-    [benWithDays]
+    () => benAug.filter((b) => !b._s.settled).sort((a, b) => (a._d ?? 1e9) - (b._d ?? 1e9)),
+    [benAug]
   )
   const oldBen = useMemo(
-    () => benWithDays.filter((b) => b.done || (b._d != null && b._d < 0)).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')),
-    [benWithDays]
+    () => benAug.filter((b) => b._s.settled).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')),
+    [benAug]
   )
   const soonBen = useMemo(
     () => activeBen.filter((b) => b._d != null && b._d <= SOON_DAYS),
     [activeBen]
   )
-  // map expiry -> สิทธิ์ที่ยัง active (ใช้กับ marker ปฏิทิน)
+  // marker ปฏิทิน: oneoff ที่ active วางที่ expiry, monthly วางที่ dayEnd ของเดือนที่กำลังดู
   const benDueMap = useMemo(() => {
     const map = {}
-    for (const b of activeBen) {
-      if (!b.expiry) continue
-      ;(map[b.expiry] ??= []).push(b)
+    const { y, m } = benView
+    const ymView = `${y}-${pad(m + 1)}`
+    for (const b of benAug) {
+      if (b.kind === 'monthly') {
+        if ((b.doneMonths || []).includes(ymView)) continue
+        ;(map[monthlyDueKey(b, y, m)] ??= []).push(b)
+      } else {
+        if (b._s.settled || !b.expiry) continue
+        ;(map[b.expiry] ??= []).push(b)
+      }
     }
     return map
-  }, [activeBen])
+  }, [benAug, benView])
   const shownBen = useMemo(
-    () => (benSelDay ? activeBen.filter((b) => b.expiry === benSelDay) : activeBen),
-    [activeBen, benSelDay]
+    () => (benSelDay ? (benDueMap[benSelDay] || []) : activeBen),
+    [activeBen, benSelDay, benDueMap]
   )
 
   const benPrev = addMons(benView.y, benView.m, -1)
@@ -812,8 +895,8 @@ export default function App() {
                     </div>
                   ) : (
                     <BenefitCard
-                      key={b.id} b={b} daysLeft={b._d}
-                      onToggleDone={() => toggleBenDone(b.id)}
+                      key={b.id} b={b}
+                      onToggle={() => b.kind === 'monthly' ? toggleBenMonth(b.id, thisMonthKey) : toggleBenDone(b.id)}
                       onEdit={() => { setBenEditId(b.id); setBenAdding(false) }}
                       onAskDelete={() => setBenConfId(b.id)}
                     />
@@ -850,8 +933,8 @@ export default function App() {
                         </div>
                       ) : (
                         <BenefitCard
-                          key={b.id} b={b} daysLeft={b._d}
-                          onToggleDone={() => toggleBenDone(b.id)}
+                          key={b.id} b={b}
+                          onToggle={() => b.kind === 'monthly' ? toggleBenMonth(b.id, thisMonthKey) : toggleBenDone(b.id)}
                           onEdit={() => { setBenEditId(b.id); setBenAdding(false) }}
                           onAskDelete={() => setBenConfId(b.id)}
                         />
@@ -1109,6 +1192,7 @@ const CSS = `
 .fh .btitle{font-family:'Mali',system-ui,sans-serif;font-weight:600;font-size:16px;word-break:break-word}
 .fh .bchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
 .fh .bchip{background:var(--paper-2);color:var(--ink-soft);border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600}
+.fh .bchip.month{background:var(--mint-wash);color:var(--mint-ink)}
 .fh .bdue{margin-top:8px;font-size:12.5px;font-weight:600;font-family:'IBM Plex Mono',ui-monospace,monospace}
 .fh .bdue.lvl-red{color:#B91C1C}
 .fh .bdue.lvl-orange{color:var(--orange-ink)}

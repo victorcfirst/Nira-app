@@ -102,6 +102,15 @@ function benStatus(b, todayKey) {
   const expired = !b.done && d != null && d < 0
   return { monthly: false, d, received: !!b.done, missed: false, expired, settled: !!b.done || expired }
 }
+// migration เบา ๆ: owner (string เดิม) → owners (array) เพื่อไม่ให้ข้อมูลเก่าหาย
+function migrateBenefits(arr) {
+  if (!Array.isArray(arr)) return arr
+  return arr.map((b) => {
+    if (Array.isArray(b.owners)) return b
+    const { owner, ...rest } = b
+    return { ...rest, owners: owner ? [owner] : [] }
+  })
+}
 // dueKey ของ monthly สำหรับเดือนที่กำลังดู (y, m = 0-11)
 function monthlyDueKey(b, y, m) {
   const dim = daysInMonth(y, m)
@@ -359,7 +368,8 @@ function BenefitForm({ initial, onSave, onCancel }) {
   const [store,      setStore]      = useState(initial?.store      || '')
   const [source,     setSource]     = useState(initial?.source     || '')
   const [value,      setValue]      = useState(initial?.value      || '')
-  const [owner,      setOwner]      = useState(initial?.owner      || '')
+  const [owners,     setOwners]     = useState(initial?.owners || (initial?.owner ? [initial.owner] : []))
+  const [ownerInput, setOwnerInput] = useState('')
   const [proof,      setProof]      = useState(initial?.proof      || '')
   const [note,       setNote]       = useState(initial?.note       || '')
   const [kind,       setKind]       = useState(initial?.kind       || 'oneoff')
@@ -368,6 +378,8 @@ function BenefitForm({ initial, onSave, onCancel }) {
   const [dayStart,   setDayStart]   = useState(initial?.dayStart != null ? String(initial.dayStart) : '')
   const [dayEnd,     setDayEnd]     = useState(initial?.dayEnd   != null ? String(initial.dayEnd)   : '')
   const onlyDay = (v) => v.replace(/[^0-9]/g, '').slice(0, 2)
+  const toggleOwner = (o) => setOwners((cur) => (cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]))
+  const addOwner = () => { const v = ownerInput.trim(); if (v && !owners.includes(v)) setOwners((cur) => [...cur, v]); setOwnerInput('') }
   const canSave = title.trim().length > 0 && (
     kind === 'monthly' ? Number(dayEnd) >= 1 && Number(dayEnd) <= 31 : expiry.trim().length > 0
   )
@@ -378,7 +390,7 @@ function BenefitForm({ initial, onSave, onCancel }) {
       store:  store.trim()  || null,
       source: source.trim() || null,
       value:  value.trim()  || null,
-      owner:  owner.trim()  || null,
+      owners: owners.map((s) => s.trim()).filter(Boolean),
       proof:  proof.trim()  || null,
       note:   note.trim()   || null,
     }
@@ -427,13 +439,24 @@ function BenefitForm({ initial, onSave, onCancel }) {
         <input className="inp" value={value} onChange={(e) => setValue(e.target.value)} placeholder="เช่น 50 บาท / 15%" />
       </div>
       <div className="fld">
-        <label>เจ้าของสิทธิ์ <span className="opt">(ไม่ใส่ก็ได้)</span></label>
+        <label>เจ้าของสิทธิ์ <span className="opt">(เลือกได้หลายคน · ไม่ใส่ก็ได้)</span></label>
         <div className="chips">
           {OWNERS.map((o) => (
-            <button key={o} className={`chip${owner === o ? ' on' : ''}`} onClick={() => setOwner((cur) => (cur === o ? '' : o))}>{o}</button>
+            <button key={o} className={`chip${owners.includes(o) ? ' on' : ''}`} onClick={() => toggleOwner(o)}>{o}</button>
           ))}
         </div>
-        <input className="inp" style={{ marginTop: 8 }} value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="หรือพิมพ์ชื่อเอง" />
+        {owners.filter((o) => !OWNERS.includes(o)).length > 0 && (
+          <div className="chips" style={{ marginTop: 8 }}>
+            {owners.filter((o) => !OWNERS.includes(o)).map((o) => (
+              <button key={o} className="chip on" onClick={() => toggleOwner(o)}>{o} ✕</button>
+            ))}
+          </div>
+        )}
+        <div className="owneradd">
+          <input className="inp" value={ownerInput} onChange={(e) => setOwnerInput(e.target.value)} placeholder="หรือพิมพ์ชื่อเอง"
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOwner() } }} />
+          <button className="btn ghost" disabled={!ownerInput.trim()} onClick={addOwner}>เพิ่ม</button>
+        </div>
       </div>
       <div className="fld">
         <label>ได้มาจาก <span className="opt">(ไม่ใส่ก็ได้)</span></label>
@@ -481,7 +504,7 @@ function BenefitCard({ b, onToggle, onEdit, onAskDelete }) {
           {s.monthly ? <span className="bchip month">รายเดือน</span> : null}
           {b.store ? <span className="bchip">{b.store}</span> : null}
           {b.value ? <span className="bchip">{b.value}</span> : null}
-          {b.owner ? <span className="bchip">{b.owner}</span> : null}
+          {b.owners && b.owners.length > 0 ? <span className="bchip">{b.owners.join(', ')}</span> : null}
         </div>
         <div className={`bdue lvl-${lvl}`}>{dueText}</div>
         {open && (
@@ -557,7 +580,7 @@ export default function App() {
       if (!alive) return
       if (r)      { restRef.current = JSON.stringify(r); setRestaurants(r) }
       if (l)      { launRef.current = JSON.stringify(l); setLaundry(l) }
-      if (b)      { benRef.current  = JSON.stringify(b); setBenefits(b) }
+      if (b)      { const mb = migrateBenefits(b); benRef.current = JSON.stringify(mb); setBenefits(mb) }
       setReady(true)
     })
 
@@ -569,7 +592,7 @@ export default function App() {
         const s = JSON.stringify(value)
         if (key === K.restaurants && s !== restRef.current) { restRef.current = s; setRestaurants(value) }
         if (key === K.laundry     && s !== launRef.current) { launRef.current = s; setLaundry(value) }
-        if (key === K.benefits    && s !== benRef.current)  { benRef.current  = s; setBenefits(value) }
+        if (key === K.benefits    && s !== benRef.current)  { const mb = migrateBenefits(value); benRef.current = JSON.stringify(mb); setBenefits(mb) }
       })
       .subscribe()
 
@@ -1193,6 +1216,9 @@ const CSS = `
 .fh .bchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
 .fh .bchip{background:var(--paper-2);color:var(--ink-soft);border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600}
 .fh .bchip.month{background:var(--mint-wash);color:var(--mint-ink)}
+.fh .owneradd{display:flex;gap:8px;margin-top:8px}
+.fh .owneradd .inp{flex:1}
+.fh .owneradd .btn{flex:0 0 auto}
 .fh .bdue{margin-top:8px;font-size:12.5px;font-weight:600;font-family:'IBM Plex Mono',ui-monospace,monospace}
 .fh .bdue.lvl-red{color:#B91C1C}
 .fh .bdue.lvl-orange{color:var(--orange-ink)}
